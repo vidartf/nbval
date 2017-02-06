@@ -14,6 +14,8 @@ import os
 import re
 import hashlib
 import warnings
+import tempfile
+import shutil
 from collections import OrderedDict, defaultdict
 
 # for python 3 compatibility
@@ -83,6 +85,11 @@ def pytest_addoption(parser):
     group.addoption('--nbval-cell-timeout', action='store', default=2000,
                     type=float,
                     help='Timeout for cell execution, in seconds.')
+
+    group.addoption('--nbval-tmp-cwd', action='store_true',
+                    help='Set the current working directory to a '
+                    'new temporary directory before executing each '
+                    'notebook.')
 
     term_group = parser.getgroup("terminal reporting")
     term_group._addoption(
@@ -208,6 +215,7 @@ class IPyNbFile(pytest.File):
             self.skip_compare = self.skip_compare + ('image/png', 'image/jpeg')
 
     kernel = None
+    tmpdir = None
 
     def setup(self):
         """
@@ -220,10 +228,14 @@ class IPyNbFile(pytest.File):
         else:
             kernel_name = self.nb.metadata.get(
                 'kernelspec', {}).get('name', 'python')
-        self.kernel = RunningKernel(kernel_name, str(self.fspath.dirname))
+        if self.parent.config.option.nbval_tmp_cwd:
+            self.tmpdir = tempfile.mkdtemp()
+            self.kernel = RunningKernel(kernel_name, self.tmpdir)
+        else:
+            self.kernel = RunningKernel(kernel_name, str(self.fspath.dirname))
         self.setup_sanitize_files()
         if getattr(self.parent.config.option, 'cov_source', None):
-            setup_coverage(self.parent.config, self.kernel, getattr(self, "fspath", None))
+            setup_coverage(self.parent.config, self.kernel, self.fspath)
 
 
     def setup_sanitize_files(self):
@@ -304,6 +316,8 @@ class IPyNbFile(pytest.File):
             if getattr(self.parent.config.option, 'cov_source', None):
                 teardown_coverage(self.parent.config, self.kernel)
             self.kernel.stop()
+        if self.tmpdir:
+            shutil.rmtree(self.tmpdir)
 
 
 class IPyNbCell(pytest.Item):
